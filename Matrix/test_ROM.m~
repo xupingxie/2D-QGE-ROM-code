@@ -1,0 +1,132 @@
+ny=513;nx=257;
+dx=1/256;
+dy=dx;
+xgrid=0:dx:1;
+ygrid=0:dy:2;
+% [X,Y]=meshgrid(x,y);
+% %f1=X.*Y;
+% %f2=X.*Y;
+% f1=X.*Y./2;
+% f2=(X-1).*(Y-1);
+% W=simpson_2D_weights(nx,ny,dx,dy);
+% nit=sum(sum(W.*f1.*f2));
+
+W=simpson_2D_weights(nx,ny,dx,dy);
+%[px, py]=compute_velocity(p,dx,dy,xgrid,ygrid);
+r=10;
+% vorPOD=zeros(513,257,r);
+% for i=1:r
+%     wPOD=reshape(POD_vor(:,i),[513 257]);
+%     [wPODx,wPODy]=compute_velocity(wPOD,dx,dy,xgrid,ygrid);
+%     
+% end
+
+%---compute Tensor
+Tyx=zeros(r,r,r);
+Txy=zeros(r,r,r);
+psiPODx=zeros(ny,nx,r);
+psiPODy=zeros(ny,nx,r);
+wPOD=zeros(ny,nx,r);
+wPODx=zeros(ny,nx,r);
+wPODy=zeros(ny,nx,r);
+
+for i=1:r
+    pPOD=reshape(POD_psi(:,i),[513 257]);
+    [pPODx,pPODy]=compute_velocity(pPOD,dx,dy,xgrid,ygrid);
+    psiPODx(:,:,i)=pPODx;
+    psiPODy(:,:,i)=pPODy;
+    
+    vPOD=reshape(POD_vor(:,i),[513 257]);
+    [vPODx,vPODy]=compute_velocity(vPOD,dx,dy,xgrid,ygrid);
+    wPOD(:,:,i)=vPOD;
+    wPODx(:,:,i)=vPODx;
+    wPODy(:,:,i)=vPODy;
+
+end
+for i=1:r
+    for j=1:r
+        for k=1:r
+            Tyx(i,j,k)=sum(sum(sum(W.*(psiPODy(:,:,i).*wPODx(:,:,j).*wPOD(:,:,k)))));
+            Txy(i,j,k)=sum(sum(sum(W.*(psiPODx(:,:,i).*wPODy(:,:,j).*wPOD(:,:,k)))));
+        end
+    end
+end
+
+for i=1:r
+    for k=1:r
+        Mr_x0(i,k)=sum(sum(W.*(psiPODx(:,:,i).*wPOD(:,:,k))));
+    end
+end
+
+for i=1:r
+    for k=1:r
+        Sr(i,k)=sum(sum(W.*(wPODx(:,:,i).*wPODx(:,:,k)+wPODy(:,:,i).*wPODy(:,:,k))));
+    end
+end
+
+[X,Y]=meshgrid(xgrid,ygrid);
+F=sin(pi*(Y-1));
+for i=1:r
+    fr(i)=sum(sum(W.*F.*wPOD(:,:,k)));
+end
+
+fprintf('computing ODE now\n')
+ddt=0.001;
+n_time=(80-10)/ddt;
+save_index = 10;
+t0=10;
+wr0=POD_vor'*M*w_snap(:,1);
+Cw = zeros(r,7001);
+Cw(:,1)=wr0;
+
+for k=1:n_time
+    
+    %--------Compute K1
+    t=t0;
+    a=wr0;
+    %K1=Assemble_differential_F(a,r,fr1,P,Q);
+    NonL=nonlinear_term(a,Txy,Tyx,r);
+    K1=NonL+(1/Ro)*Mr_x0*a-(1/Re)*Sr*a+(1/Ro)*fr;
+    
+    %--------Compute K2
+    t=t0+ddt/2;
+    a=wr0+ddt*K1/2;
+    %K2=Assemble_differential_F(a,r,fr2,P,Q);
+    NonL=nonlinear_term(a,Txy,Tyx,r);
+    K2=NonL+(1/Ro)*Mr_x0*a-(1/Re)*Sr*a+(1/Ro)*fr;
+    
+    %---------Compute K3
+    a=wr0+ddt*K2/2;
+    %K3=Assemble_differential_F(a,r,fr2,P,Q);
+    NonL=nonlinear_term(a,Txy,Tyx,r);
+    K3=NonL+(1/Ro)*Mr_x0*a-(1/Re)*Sr*a+(1/Ro)*fr;
+    
+    %---------Compute K4
+    t=t0+ddt;
+    a=wr0+ddt*K3;
+    %K4=Assemble_differential_F(a,r,fr3,P,Q);
+    NonL=nonlinear_term(a,Txy,Tyx,r);
+    K4=NonL+(1/Ro)*Mr_x0*a-(1/Re)*Sr*a+(1/Ro)*fr;
+    
+    %----------Compute w^n+1
+    
+    w_new=wr0+ddt*(K1+2*K2+2*K3+K4)/6;
+    
+    if rem(k,save_index) == 0
+        Cw(:,k/save_index+1) = w_new;
+        k,t,
+        %Cw(:,k+1)=C1;
+    end
+    wr0=w_new;
+    t0=t;
+end
+%options_ODE=odeset('Reltol', 1e-8,'AbsTol', 1e-8);
+%y0=POD_vor'*M*w_snap(:,1);
+%[~,temp]=ode45(@(t,y)Galerkin_QGE(y,r,B,P,Q),(time(1):0.01:time(2)),y0,options_ODE);
+
+w_rom=POD_vor*Cw;
+psi_rom=POD_psi*Cw;
+
+
+
+
